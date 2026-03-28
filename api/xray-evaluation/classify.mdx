@@ -1,0 +1,149 @@
+---
+title: "POST /cnn_xray_demo"
+description: "Classify a chest X-ray image and generate a GradCAM explainability heatmap"
+---
+
+Accepts a Base64-encoded chest X-ray image, runs classification using `YOLO11m-cls`, and returns a prediction label with confidence, GradCAM heatmap images, and detailed latency metrics.
+
+## Request
+
+**Method:** `POST`  
+**Path:** `/cnn_xray_demo`  
+**Content-Type:** `application/json`
+
+### Body parameters
+
+<ParamField body="image_base64" type="string" required>
+  Base64-encoded X-ray image. Accepts JPEG or PNG. Do not include a `data:` URI prefix — send the raw Base64 string only.
+</ParamField>
+
+## Response
+
+### 200 — Success
+
+<ResponseField name="prediction" type="object" required>
+  Classification result from the model.
+
+  <Expandable title="properties">
+    <ResponseField name="label" type="string" required>
+      Predicted class label. One of `"Normal"` or `"Anomaly"`.
+    </ResponseField>
+
+    <ResponseField name="confidence" type="number" required>
+      Model confidence score for the predicted class, in the range `0` to `1`.
+    </ResponseField>
+
+    <ResponseField name="class_id" type="integer" required>
+      Numeric class identifier corresponding to the predicted label.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="explainability" type="object" required>
+  GradCAM outputs for visual explainability.
+
+  <Expandable title="properties">
+    <ResponseField name="heatmap_base64" type="string" required>
+      Base64-encoded image of the raw GradCAM heatmap (color map only, no overlay).
+    </ResponseField>
+
+    <ResponseField name="overlay_base64" type="string" required>
+      Base64-encoded image of the original X-ray with the heatmap overlaid on top.
+    </ResponseField>
+
+    <ResponseField name="description" type="string" required>
+      Human-readable explanation of the heatmap colour scale (e.g. which colour indicates high model attention).
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="performance" type="object" required>
+  Per-stage latency breakdown for the full inference pipeline.
+
+  <Expandable title="properties">
+    <ResponseField name="preprocess_time_ms" type="number" required>
+      Time in milliseconds to decode the Base64 input and prepare the image tensor.
+    </ResponseField>
+
+    <ResponseField name="inference_time_ms" type="number" required>
+      Time in milliseconds for the YOLO model to run the forward pass.
+    </ResponseField>
+
+    <ResponseField name="explainability_time_ms" type="number" required>
+      Time in milliseconds to compute the GradCAM heatmap and overlay.
+    </ResponseField>
+
+    <ResponseField name="total_latency_ms" type="number" required>
+      End-to-end latency in milliseconds for the full request.
+    </ResponseField>
+
+    <ResponseField name="model_used" type="string" required>
+      Identifier of the model that processed the request (e.g. `"YOLO11m-cls"`).
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Error responses
+
+| Status | Trigger                                     | Detail                                                       |
+| ------ | ------------------------------------------- | ------------------------------------------------------------ |
+| `400`  | Invalid or undecodable Base64 image string  | Validation error message describing the decoding failure     |
+| `500`  | Unexpected error during inference or GradCAM | Internal error message describing the failure                |
+
+<Warning>
+  A `400` error is returned when the Base64 string cannot be decoded into a valid image. Verify the encoding is correct and that no `data:` URI prefix is included.
+</Warning>
+
+## Examples
+
+<RequestExample>
+
+```bash cURL
+curl -X 'POST' \
+  'http://localhost:8080/cnn_xray_demo' \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "image_base64": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDA..."
+  }'
+```
+
+</RequestExample>
+
+<ResponseExample>
+
+```json 200
+{
+  "prediction": {
+    "label": "Anomaly",
+    "confidence": 0.985,
+    "class_id": 0
+  },
+  "explainability": {
+    "heatmap_base64": "...",
+    "overlay_base64": "...",
+    "description": "Red indicates high attention regions."
+  },
+  "performance": {
+    "preprocess_time_ms": 12.5,
+    "inference_time_ms": 15.2,
+    "explainability_time_ms": 8.1,
+    "total_latency_ms": 35.8,
+    "model_used": "YOLO11m-cls"
+  }
+}
+```
+
+```json 400
+{
+  "detail": "Cannot decode Base64 image: invalid character in string"
+}
+```
+
+```json 500
+{
+  "detail": "Ocurrió un error interno al procesar la radiografía: <error message>"
+}
+```
+
+</ResponseExample>

@@ -1,0 +1,214 @@
+---
+title: "Architecture"
+description: "How the deep learning microservices are structured and designed"
+---
+
+Deep Learning Services is a **monorepo** containing three production-grade inference microservices. Every service follows the same internal structure, shares the same FastAPI + Docker conventions, and deploys through the same GCP CI/CD pipeline.
+
+## Monorepo layout
+
+```text
+deep_learning_services/
+├── container-images/               # Optimized Dockerfiles for each service
+│   ├── credit_scoring_service/
+│   └── xrays_evaluation_service/
+├── ops/                            # Cloud Build YAML pipelines for GCP
+│   ├── cloudbuild-credit_scoring_service.yaml
+│   ├── cloudbuild-xrays_evaluation_service.yaml
+│   └── cloudbuild-smart_checkout_service.yaml
+├── python/                         # Service source code
+│   ├── credit_scoring/             # MLP credit risk predictor
+│   ├── xrays_evaluation/           # CNN chest X-ray classifier + GradCAM
+│   └── smart_checkout/             # YOLO object detection via WebSockets
+├── .dockerignore
+└── README.md
+```
+
+## Services overview
+
+<CardGroup cols={3}>
+  <Card title="Credit Scoring" icon="coins">
+    **Model:** MLP (Multi-Layer Perceptron)  
+    Tabular credit risk classification. Accepts demographic and financial applicant data, runs it through a scikit-learn preprocessing pipeline, and returns a binary `good`/`bad` prediction with a probability score.
+  </Card>
+  <Card title="X-Ray Evaluation" icon="lungs">
+    **Model:** CNN YOLOv11-cls  
+    Chest X-ray image classification. Accepts a Base64-encoded image, classifies it as Normal or Anomaly, and generates GradCAM heatmaps for visual explainability.
+  </Card>
+  <Card title="Smart Checkout" icon="cart-shopping">
+    **Model:** CNN YOLO26  
+    Real-time multi-object detection over WebSockets. Accepts raw binary video frames from a client, runs GPU-accelerated inference, and streams back bounding boxes enriched with product catalog data.
+  </Card>
+</CardGroup>
+
+## Internal service structure
+
+Each service under `python/` follows an identical four-layer layout:
+
+```text
+python/<service_name>/
+├── src/
+│   ├── server/          # FastAPI app, route handlers, Pydantic schemas
+│   ├── inference/       # Model loading and prediction logic
+│   ├── processing/      # Data preprocessing and transformation pipeline
+│   └── training/        # Model training scripts
+├── config/              # Settings and env config (Smart Checkout only)
+├── models/              # Trained model artefacts (.pt, .joblib)
+├── requirements.txt
+└── README.md
+```
+
+### `src/server/` — API layer
+
+Each service exposes a FastAPI application with CORS middleware and Pydantic-validated request/response schemas.
+
+The Credit Scoring app (`python/credit_scoring/src/server/app.py`) illustrates the pattern shared by all three services:
+
+```python
+app = FastAPI(
+    title="API de Inferencia para Scoring de Crédito",
+    description="Un microservicio para predecir el riesgo crediticio usando un modelo MLP con PyTorch.",
+    version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.post("/mlp_demo", response_model=CreditRiskOutput)
+async def predict_credit_risk(request: CreditRiskInput) -> CreditRiskOutput:
+    prediction_result = predictor_instance.predict(request)
+    return CreditRiskOutput(**prediction_result)
+```
+
+Pydantic schemas (`src/server/schemas.py`) enforce strict typing on every field, including `Enum` validation for categorical inputs such as `Sex`, `Housing`, and `Purpose`.
+
+### `src/inference/` — Model layer
+
+Contains the predictor class responsible for loading the trained model artefact at startup and running forward-pass inference. The Credit Scoring service loads a `.pt` PyTorch checkpoint alongside a `.joblib` scikit-learn preprocessor. The X-Ray and Smart Checkout services load Ultralytics YOLO `.pt` weights.
+
+### `src/processing/` — Pipeline layer
+
+Implements the data transformation pipeline that bridges raw API input and the model's expected tensor format. For X-Ray Evaluation this layer also runs the GradCAM explainability algorithm after inference.
+
+The X-Ray pipeline is invoked directly from the route handler:
+
+```python
+cnn_xrays_demo = XRayInferencePipeline()
+
+@app.post("/cnn_xray_demo", response_model=XRayOutput)
+async def predict_xray(request: XRayInput) -> XRayOutput:
+    result = cnn_xrays_demo.run(request.image_base64)
+    return XRayOutput(**result)
+```
+
+### `src/training/` — Training layer
+
+Standalone scripts used to train and export the model artefacts. These are not executed at runtime; they produce the `.pt` and `.joblib` files consumed by the inference layer.
+
+## Shared patterns
+
+All three services are built on the same foundation:
+
+| Pattern | Detail |
+|---------|--------|
+| **Web framework** | [FastAPI](https://fastapi.tiangolo.com/) with async route handlers |
+| **Schema validation** | [Pydantic](https://docs.pydantic.dev/) — strict types and enum validation on every request and response |
+| **CORS middleware** | `fastapi.middleware.cors.CORSMiddleware` configured on every app |
+| **Container runtime** | Docker with multi-stage builds for minimal image size |
+| **Auto-generated docs** | Swagger UI at `/docs`, ReDoc at `/redoc` — available out of the box |
+
+<Note>
+  Smart Checkout differs from the other two services in one important way: its primary endpoint is a **WebSocket** (`ws://`) rather than a REST `POST`. This allows the service to receive raw binary video frames and stream detection results back to the client with sub-millisecond overhead per frame, avoiding the HTTP header cost on every request.
+</Note>
+
+## Deployment pipeline
+
+Every service is deployed to **Google Cloud Run** through an automated CI/CD pipeline defined in `ops/`.
+
+<Steps>
+
+<Step title="Push to GitHub">
+
+A developer pushes code (or merges a pull request) to the main branch. This event triggers the corresponding Cloud Build pipeline defined in `ops/cloudbuild-<service>.yaml`.
+
+</Step>
+
+<Step title="Cloud Build — build">
+
+Cloud Build pulls the repository and builds the Docker image using the production Dockerfile in `container-images/`. For example, the Credit Scoring pipeline runs:
+
+```yaml
+- name: 'gcr.io/cloud-builders/docker'
+  args:
+    - 'build'
+    - '-t'
+    - 'us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/credit-scoring-service:${SHORT_SHA}'
+    - '--file=container-images/credit_scoring_service/Dockerfile'
+    - '.'
+```
+
+</Step>
+
+<Step title="Artifact Registry — store">
+
+The freshly built image is pushed to **Google Artifact Registry** and tagged with the Git commit short SHA, giving every deployment a unique, immutable identifier.
+
+```yaml
+- name: 'gcr.io/cloud-builders/docker'
+  args:
+    - 'push'
+    - 'us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/credit-scoring-service:${SHORT_SHA}'
+```
+
+</Step>
+
+<Step title="Cloud Run — deploy">
+
+Cloud Build deploys the new image to a managed **Cloud Run** service in `us-central1`. Cloud Run handles auto-scaling (including scale-to-zero) with no infrastructure management required.
+
+```yaml
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  entrypoint: gcloud
+  args:
+    - 'run'
+    - 'deploy'
+    - 'credit-scoring-service'
+    - '--image=us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/credit-scoring-service:${SHORT_SHA}'
+    - '--platform=managed'
+    - '--region=us-central1'
+    - '--allow-unauthenticated'
+    - '--memory=1Gi'
+```
+
+</Step>
+
+</Steps>
+
+## Infrastructure components
+
+### Docker multi-stage builds
+
+Production Dockerfiles in `container-images/` use multi-stage builds to keep the final image lean: a `builder` stage installs all compile-time dependencies, and the final stage copies only the installed packages and source code.
+
+### Cloud Run — serverless scaling
+
+All services run as stateless Cloud Run instances. Cloud Run automatically scales replicas up under load and down to zero when idle, making the cost proportional to actual usage.
+
+### GPU support — Smart Checkout
+
+The Smart Checkout service requires hardware acceleration. Its Cloud Run deployment provisions an **NVIDIA L4 GPU** (Ada Lovelace architecture) and configures the container with sufficient resources for concurrent WebSocket streams:
+
+| Resource | Value |
+|----------|-------|
+| GPU type | `nvidia-l4` |
+| GPU count | 1 |
+| CPU | 4 vCPU |
+| Memory | 16 GiB |
+| Concurrency | 20 simultaneous WebSocket connections |
+
+The inference engine uses `asyncio.Lock()` to prevent race conditions when multiple video streams compete for the same GPU device (`cuda:0`).

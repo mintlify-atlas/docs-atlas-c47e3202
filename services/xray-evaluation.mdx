@@ -1,0 +1,205 @@
+---
+title: "X-Ray Evaluation Service"
+description: "Classify chest X-rays and generate GradCAM explainability heatmaps"
+---
+
+## Overview
+
+The X-Ray Evaluation Service is a computer vision microservice that classifies chest X-ray images as **Normal** or **Anomaly**, and simultaneously generates a **GradCAM visual explainability heatmap** highlighting which regions of the image influenced the model's decision.
+
+A single request produces two outputs:
+
+1. **Classification** — label (`Normal` / `Anomaly`), confidence score, and class ID.
+2. **Explainability** — a GradCAM heatmap image and an overlay image superimposed on the original X-ray, both returned as Base64 strings.
+
+This dual output is designed to support **medical audit workflows**, where a clinician needs to understand not just the model's verdict, but _why_ it was reached.
+
+## Model
+
+The service uses **YOLOv11-cls** (`YOLO11m-cls`) from [Ultralytics](https://github.com/ultralytics/ultralytics), fine-tuned on a Chest X-Rays classification dataset.
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="brain">
+    YOLOv11-cls (medium variant)
+  </Card>
+  <Card title="Framework" icon="layer-group">
+    Ultralytics + PyTorch + OpenCV
+  </Card>
+  <Card title="Classes" icon="tags">
+    Normal, Anomaly
+  </Card>
+  <Card title="Explainability" icon="magnifying-glass">
+    GradCAM heatmaps
+  </Card>
+</CardGroup>
+
+## Input Schema
+
+The endpoint accepts a single JSON field:
+
+| Field | Type | Description |
+|---|---|---|
+| `image_base64` | string | Base64-encoded chest X-ray image |
+
+```json
+{
+  "image_base64": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDA..."
+}
+```
+
+<Warning>
+  The image must be a valid Base64 string. Malformed or non-decodable strings will return a `400 Bad Request` error.
+</Warning>
+
+## Output Schema
+
+The response is structured into three nested objects:
+
+### `prediction`
+
+| Field | Type | Description |
+|---|---|---|
+| `label` | string | `"Normal"` or `"Anomaly"` |
+| `confidence` | float `[0, 1]` | Model confidence for the predicted class |
+| `class_id` | integer | Numeric class identifier |
+
+### `explainability`
+
+| Field | Type | Description |
+|---|---|---|
+| `heatmap_base64` | string | GradCAM heatmap image (color only) as Base64 |
+| `overlay_base64` | string | Original image with heatmap overlay as Base64 |
+| `description` | string | Human-readable explanation of the heatmap |
+
+### `performance`
+
+| Field | Type | Description |
+|---|---|---|
+| `preprocess_time_ms` | float | Time to decode and prepare the image |
+| `inference_time_ms` | float | Time taken by the YOLO model to infer |
+| `explainability_time_ms` | float | Time taken to generate the GradCAM heatmap |
+| `total_latency_ms` | float | Total end-to-end latency |
+| `model_used` | string | Name of the model used (e.g. `"YOLO11m-cls"`) |
+
+## Endpoints
+
+### `POST /cnn_xray_demo`
+
+Classifies a chest X-ray and returns prediction, GradCAM heatmap, and performance metrics.
+
+### `GET /health`
+
+Returns the service health status and the active model name.
+
+```json
+{
+  "status": "ok",
+  "model": "YOLO11m-cls"
+}
+```
+
+## Example Request
+
+<Tabs>
+  <Tab title="cURL">
+    ```bash
+    curl -X 'POST' \
+      'http://localhost:8080/cnn_xray_demo' \
+      -H 'accept: application/json' \
+      -H 'Content-Type: application/json' \
+      -d '{
+      "image_base64": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDA..."
+    }'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    {
+      "prediction": {
+        "label": "Anomaly",
+        "confidence": 0.985,
+        "class_id": 0
+      },
+      "explainability": {
+        "heatmap_base64": "...",
+        "overlay_base64": "...",
+        "description": "Red indicates high attention regions."
+      },
+      "performance": {
+        "preprocess_time_ms": 12.5,
+        "inference_time_ms": 15.2,
+        "explainability_time_ms": 8.1,
+        "total_latency_ms": 35.8,
+        "model_used": "YOLO11m-cls"
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+<Tip>
+  To encode an image for testing, use: `base64 -i chest_xray.jpg` on Linux/macOS, or the Python snippet `base64.b64encode(open("chest_xray.jpg", "rb").read()).decode()`.
+</Tip>
+
+## Local Development
+
+<Steps>
+  <Step title="Prepare model artifact">
+    Place the trained model file at:
+
+    ```
+    models/YOLO/xrays_evaluation_model_medium_v1.pt
+    ```
+  </Step>
+  <Step title="Build the Docker image">
+    From the repository root (`deep_learning_services/`):
+
+    ```bash
+    docker build -t genia/xrays-evaluation-cnn:1.0 -f container-images/xrays_evaluation_service/Dockerfile .
+    ```
+  </Step>
+  <Step title="Run the container">
+    ```bash
+    docker run -d -p 8080:8080 --name xrays-service genia/xrays-evaluation-cnn:1.0
+    ```
+  </Step>
+  <Step title="Verify the service">
+    Open the interactive API documentation:
+
+    ```
+    http://localhost:8080/docs
+    ```
+  </Step>
+</Steps>
+
+## Container Management
+
+```bash
+# Stop the service
+docker stop xrays-evaluation-service
+
+# Stream logs in real time (useful for image decode errors)
+docker logs -f xrays-evaluation-service
+
+# Remove the container
+docker rm xrays-evaluation-service
+```
+
+## Cloud Deployment
+
+CNN inference is compute-intensive. The Cloud Build pipeline (`cloudbuild-xrays_evaluation_service.yaml`) provisions Cloud Run with elevated resources:
+
+<CardGroup cols={2}>
+  <Card title="CPU" icon="microchip">
+    2 vCPU
+  </Card>
+  <Card title="Memory" icon="memory">
+    8Gi
+  </Card>
+  <Card title="Region" icon="location-dot">
+    `us-central1`
+  </Card>
+  <Card title="Auth" icon="lock-open">
+    `--allow-unauthenticated`
+  </Card>
+</CardGroup>

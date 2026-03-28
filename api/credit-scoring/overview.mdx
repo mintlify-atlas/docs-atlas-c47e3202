@@ -1,0 +1,59 @@
+---
+title: "Credit Scoring API"
+description: "REST API for credit risk prediction using a PyTorch MLP neural network"
+---
+
+The Credit Scoring API is a RESTful microservice that predicts the credit risk of a loan applicant using a Multi-Layer Perceptron (MLP) neural network built with PyTorch. It accepts demographic and financial applicant data, runs it through a scikit-learn preprocessing pipeline, and returns a binary classification: `good` or `bad`.
+
+## Base URL
+
+```
+http://localhost:8000
+```
+
+<Note>
+  When deployed to Google Cloud Run, replace the base URL with your service's Cloud Run URL. The service is configured with `--allow-unauthenticated`, so no authentication is required on either environment.
+</Note>
+
+## Interactive docs
+
+Swagger UI is available at:
+
+```
+http://localhost:8000/docs
+```
+
+Visiting `http://localhost:8000` redirects there automatically.
+
+<Tip>
+  Use the Swagger UI to explore the schema, fill in example values, and test the endpoint directly from your browser without writing any code.
+</Tip>
+
+## Authentication
+
+No authentication is required. The API is open by default.
+
+## CORS
+
+Cross-origin requests are allowed from the following origins:
+
+| Origin | Notes |
+|---|---|
+| `http://localhost` | Local development |
+| `http://localhost:8080` | Local development (port 8080) |
+| `https://www.ingeniia.co` | Production web client |
+
+All HTTP methods and headers are permitted for these origins.
+
+## Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` | Redirects to the interactive Swagger docs at `/docs` |
+| `POST` | `/mlp_demo` | Predict credit risk for a loan applicant |
+
+## Next steps
+
+<Card title="POST /mlp_demo" icon="bolt" href="/api/credit-scoring/predict">
+  Full parameter reference, request and response examples, and error codes for the prediction endpoint.
+</Card>

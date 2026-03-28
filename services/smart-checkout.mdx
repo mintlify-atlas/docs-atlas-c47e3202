@@ -1,0 +1,246 @@
+---
+title: "Smart Checkout Service"
+description: "Real-time multi-object detection via WebSocket streaming with GPU inference"
+---
+
+## Overview
+
+The Smart Checkout Service simulates an **autonomous grocery checkout** by detecting multiple products in a live video stream in real time. Instead of a conventional REST API, it uses **WebSockets** for bidirectional streaming — eliminating the HTTP header overhead that would otherwise be incurred on every frame.
+
+When a product is detected, the service enriches the raw model output with commercial data from a YAML-based product catalog: SKU, name, price, currency, and description.
+
+## Model
+
+The service runs **YOLO26** (Ultralytics), a state-of-the-art object detection architecture optimized for multi-class, high-throughput detection. Inference executes on a **CUDA GPU** (`cuda:0`).
+
+<CardGroup cols={2}>
+  <Card title="Model" icon="brain">
+    YOLO26 (Ultralytics)
+  </Card>
+  <Card title="Device" icon="microchip">
+    CUDA GPU (`cuda:0`)
+  </Card>
+  <Card title="Input size" icon="expand">
+    640 × 640 px
+  </Card>
+  <Card title="Precision" icon="bolt">
+    FP16 half-precision
+  </Card>
+</CardGroup>
+
+## Why WebSockets
+
+Traditional REST APIs send HTTP headers with every request. For a video pipeline processing tens of frames per second, this header overhead is non-trivial. WebSockets establish a **persistent, full-duplex connection** so that:
+
+- Frames are transmitted as raw binary data with no per-frame HTTP overhead.
+- The server can push detection results back asynchronously without the client polling.
+- GPU inference is serialized with an `asyncio.Lock()` to prevent race conditions under high concurrency.
+
+## Binary Message Protocol
+
+The client sends a single **binary `ArrayBuffer`** per frame with the following layout:
+
+```
+[ 8 bytes — uint64 Frame ID (Little-Endian) ] [ N bytes — JPEG image data ]
+```
+
+| Segment | Size | Format | Description |
+|---|---|---|---|
+| Frame ID | 8 bytes | `uint64` Little-Endian | Monotonic frame counter or timestamp |
+| JPEG payload | remaining bytes | raw JPEG | Compressed image frame |
+
+<Note>
+  The maximum allowed frame size is **2,500,000 bytes** (~2.5 MB). Frames exceeding this limit are rejected with an error response and `frame_id: -1`.
+</Note>
+
+## Product Catalog
+
+Detected classes are automatically enriched using a **YAML product catalog** (`config/products.yaml`). Each entry in the catalog maps a class ID or name to structured product metadata:
+
+| Field | Type | Description |
+|---|---|---|
+| `sku` | string | Stock-keeping unit identifier |
+| `name` | string | Human-readable product name |
+| `price` | float | Unit price |
+| `currency` | string | Currency code (e.g. `"USD"`) |
+| `description` | string | Short product description |
+
+## Configuration
+
+All inference parameters are controlled via **environment variables** with the `SC_` prefix. Defaults are defined in `config/settings.py`.
+
+| Variable | Default | Description |
+|---|---|---|
+| `SC_CONFIDENCE_THRESHOLD` | `0.55` | Minimum detection confidence to report a result |
+| `SC_IOU_THRESHOLD` | `0.45` | IoU threshold for Non-Maximum Suppression |
+| `SC_MAX_DET` | `100` | Maximum number of detections per frame |
+| `SC_MAX_FRAME_BYTES` | `2500000` | Maximum accepted frame size in bytes |
+| `SC_DEVICE` | `"cuda:0"` | Compute device for inference |
+| `SC_IMG_SIZE` | `640` | Input image resolution (px) |
+| `SC_HALF` | `true` | Enable FP16 half-precision inference |
+| `SC_LOG_LEVEL` | `"INFO"` | Application log level |
+
+```python
+# config/settings.py
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="SC_", env_file=".env", extra="ignore")
+
+    service_name: str = "smart_checkout_ws"
+    device: str = "cuda:0"
+    img_size: int = 640
+    confidence_threshold: float = 0.55
+    iou_threshold: float = 0.45
+    max_det: int = 100
+    half: bool = True
+    max_frame_bytes: int = 2_500_000
+```
+
+## Endpoints
+
+### `WebSocket /ws/smart_checkout`
+
+Real-time object detection stream. The client sends binary frames; the server responds with JSON detection results.
+
+### `GET /health`
+
+Verifies that the model is loaded and the service is ready.
+
+```json
+{
+  "status": "ok",
+  "service": "smart_checkout_ws",
+  "model": "smart_checkout_model_small_v1.pt",
+  "device": "cuda:0"
+}
+```
+
+## Response Schema
+
+The server responds to each frame with a JSON object (`CheckoutResponse`):
+
+| Field | Type | Description |
+|---|---|---|
+| `frame_id` | integer | Echo of the client-sent frame ID |
+| `server_time` | integer | Server-side Unix timestamp (ms) |
+| `inference_time` | float | YOLO inference time in milliseconds |
+| `img_size` | `[int, int]` | Processed image dimensions `[width, height]` |
+| `detections` | array | List of detected objects (see below) |
+| `extra` | object | Additional metadata (e.g. `total_items`) |
+
+### `detections[]` items
+
+| Field | Type | Description |
+|---|---|---|
+| `class_id` | integer | Numeric class identifier |
+| `class_name` | string | Human-readable class label |
+| `confidence` | float `[0, 1]` | Detection confidence score |
+| `bbox_norm` | `[float × 4]` | Normalized bounding box `[cx, cy, w, h]` |
+| `product_info` | object \| null | Product catalog entry (if matched) |
+
+## Example Response
+
+```json
+{
+  "frame_id": 1708453456789,
+  "server_time": 1708453456810,
+  "inference_time": 15.4,
+  "img_size": [640, 640],
+  "detections": [
+    {
+      "class_id": 2,
+      "class_name": "manzana roja",
+      "confidence": 0.94,
+      "bbox_norm": [0.45, 0.60, 0.12, 0.15],
+      "product_info": {
+        "sku": "FRU-APL-001",
+        "name": "Manzana roja",
+        "price": 0.35,
+        "currency": "USD",
+        "description": "Manzana roja fresca"
+      }
+    }
+  ],
+  "extra": {
+    "total_items": 1
+  }
+}
+```
+
+### Error Responses
+
+If a frame is malformed or too large, the server sends a JSON error instead of a detection result:
+
+```json
+{ "frame_id": -1, "error": "frame_too_large", "limit": 2500000 }
+```
+
+```json
+{ "frame_id": -1, "error": "bad_message: <details>" }
+```
+
+```json
+{ "frame_id": 1708453456789, "error": "image_decode_failed" }
+```
+
+## Local Development
+
+<Steps>
+  <Step title="Prepare model and catalog artifacts">
+    Place the trained YOLO model at:
+    ```
+    models/YOLO/smart_checkout_model_small_v1.pt
+    ```
+
+    And the product catalog at:
+    ```
+    config/products.yaml
+    ```
+  </Step>
+  <Step title="Build the Docker image">
+    From the repository root (`deep_learning_services/`):
+
+    ```bash
+    docker build -t genia/smart-checkout-ws:1.0 -f container-images/smart_checkout_service/Dockerfile .
+    ```
+
+    <Warning>
+      This image requires CUDA dependencies. Ensure your Docker host has the NVIDIA Container Toolkit installed. The Smart Checkout Dockerfile is referenced by the Cloud Build pipeline at `container-images/smart_checkout_service/Dockerfile`.
+    </Warning>
+  </Step>
+  <Step title="Run the container">
+    ```bash
+    docker run -d -p 8080:8080 --name smart-checkout-ws genia/smart-checkout-ws:1.0
+    ```
+  </Step>
+  <Step title="Verify the service">
+    Check that the model loaded correctly:
+
+    ```
+    http://localhost:8080/health
+    ```
+
+    To test the WebSocket endpoint, use the example web client included at:
+    ```
+    examples/web_client/
+    ```
+  </Step>
+</Steps>
+
+## Cloud Deployment
+
+The service is deployed to **Google Cloud Run with an NVIDIA L4 GPU** (Ada Lovelace architecture). The Cloud Build pipeline is at `ops/cloudbuild-smart_checkout_service.yaml`.
+
+<CardGroup cols={2}>
+  <Card title="GPU" icon="microchip">
+    NVIDIA L4 (`--gpu-type=nvidia-l4`, `--gpu=1`)
+  </Card>
+  <Card title="CPU / Memory" icon="server">
+    4 vCPU / 16Gi
+  </Card>
+  <Card title="Concurrency" icon="arrows-split-up-and-left">
+    20 simultaneous WebSocket streams
+  </Card>
+  <Card title="Scale" icon="arrow-down-to-line">
+    Scale-to-Zero (serverless)
+  </Card>
+</CardGroup>

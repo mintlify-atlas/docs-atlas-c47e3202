@@ -1,0 +1,65 @@
+---
+title: "X-Ray Evaluation API"
+description: "REST API for chest X-ray classification with GradCAM explainability"
+---
+
+A microservice for classifying chest X-rays as **Normal** or **Anomaly** using a YOLOv11-based CNN model, with automatic GradCAM heatmap generation for visual explainability.
+
+## Base URL
+
+```
+http://localhost:8080
+```
+
+<Tip>
+  Interactive API docs (Swagger UI) are available at `http://localhost:8080/docs`. Navigating to `/` redirects there automatically.
+</Tip>
+
+## Authentication
+
+No authentication is required. All endpoints are publicly accessible.
+
+## Endpoints
+
+| Method | Path              | Description                                      |
+| ------ | ----------------- | ------------------------------------------------ |
+| GET    | `/`               | Redirects to `/docs`                             |
+| GET    | `/health`         | Health check — returns model status              |
+| POST   | `/cnn_xray_demo`  | Classify an X-ray and generate a GradCAM heatmap |
+
+## CORS
+
+The following origins are permitted:
+
+| Origin                          |
+| ------------------------------- |
+| `http://localhost`              |
+| `http://localhost:3000`         |
+| `http://localhost:8080`         |
+| `https://www.ingeniia.co`       |
+| `https://platform.ingeniia.co` |
+
+All HTTP methods and headers are allowed.
+
+## Image format
+
+Images must be sent as **Base64-encoded strings** in the JSON request body. Both JPEG and PNG formats are supported.
+
+<Note>
+  The API does not accept multipart file uploads. Encode your image to a Base64 string before sending it.
+</Note>
+
+## Health check
+
+Send a `GET` request to `/health` to verify the service is running and confirm which model is loaded.
+
+```bash
+curl http://localhost:8080/health
+```
+
+```json
+{
+  "status": "ok",
+  "model": "YOLO11m-cls"
+}
+```

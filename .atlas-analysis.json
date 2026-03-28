@@ -1,23 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "Deep Learning Services",
+  "projectType": "ai-ml",
+  "projectName": "Deep Learning Services",
+  "projectDescription": "A collection of production-ready deep learning microservices — Credit Scoring (MLP), X-Ray Evaluation (CNN + GradCAM), and Smart Checkout (YOLO + WebSockets) — each dockerized and deployable to Google Cloud Run.",
   "theme": "luma",
-  "colors": {
-    "primary": "#94cb04",
-    "light": "#545454"
-  },
-  "favicon": "https://media.brand.dev/288cc7c4-5cef-4376-950b-bdf0083eedae.png",
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/AprendeIngenia/deep_learning_services"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/AprendeIngenia/deep_learning_services"
-    }
-  },
+  "primaryColor": "#94cb04",
+  "lightColor": "#545454",
+  "darkColor": null,
   "navigation": {
     "tabs": [
       {
@@ -83,5 +71,19 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "Credit risk prediction via MLP neural network with PyTorch and FastAPI REST endpoint",
+    "Chest X-ray classification using YOLOv11-cls CNN with GradCAM explainability heatmaps",
+    "Real-time multi-object detection via WebSocket streaming with YOLO26 and GPU inference",
+    "All services fully dockerized with optimized multi-stage Dockerfiles for Google Cloud Run",
+    "Automated CI/CD pipeline via Google Cloud Build with Artifact Registry and Cloud Run deployment",
+    "Pydantic schema validation for strict type-safe API contracts across all services"
+  ],
+  "publicApiSurface": [
+    "POST /mlp_demo — Credit risk prediction (good/bad + probability)",
+    "POST /cnn_xray_demo — X-ray classification + GradCAM heatmap (Base64 in/out)",
+    "GET /health — Service health check (X-Ray and Smart Checkout services)",
+    "WebSocket /ws/smart_checkout — Real-time object detection stream (binary frame protocol)"
+  ]
 }

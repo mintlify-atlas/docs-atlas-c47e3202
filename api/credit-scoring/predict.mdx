@@ -1,0 +1,143 @@
+---
+title: "POST /mlp_demo"
+description: "Predict credit risk (good or bad) for a loan applicant"
+---
+
+Accepts demographic and financial data for a loan applicant and returns a credit risk classification produced by the MLP model.
+
+## Request
+
+**Method:** `POST`  
+**Path:** `/mlp_demo`  
+**Content-Type:** `application/json`
+
+### Body parameters
+
+<ParamField body="Age" type="integer" required>
+  Applicant age in years. Must be greater than 0.
+</ParamField>
+
+<ParamField body="Sex" type="string" required>
+  Applicant sex. Accepted values: `"male"`, `"female"`.
+</ParamField>
+
+<ParamField body="Job" type="integer" required>
+  Applicant job skill level, from 0 (unskilled, non-resident) to 3 (highly skilled). Accepted values: `0`, `1`, `2`, `3`.
+</ParamField>
+
+<ParamField body="Housing" type="string" required>
+  Applicant's housing situation. Accepted values: `"own"`, `"rent"`, `"free"`.
+</ParamField>
+
+<ParamField body="Saving accounts" type="string" required>
+  Status of the applicant's saving accounts. Accepted values: `"NA"`, `"little"`, `"moderate"`, `"quite rich"`, `"rich"`.
+
+  Use `"NA"` when the applicant has no saving account or the information is unavailable.
+</ParamField>
+
+<ParamField body="Checking account" type="string" required>
+  Status of the applicant's checking account. Accepted values: `"NA"`, `"little"`, `"moderate"`, `"rich"`.
+
+  Use `"NA"` when the applicant has no checking account or the information is unavailable.
+</ParamField>
+
+<ParamField body="Credit amount" type="number" required>
+  Requested credit amount. Must be greater than 0.
+</ParamField>
+
+<ParamField body="Duration" type="integer" required>
+  Requested credit duration in months. Must be greater than 0.
+</ParamField>
+
+<ParamField body="Purpose" type="string" required>
+  Intended purpose of the credit. Accepted values:
+
+  - `"car"`
+  - `"furniture/equipment"`
+  - `"radio/TV"`
+  - `"domestic appliances"`
+  - `"repairs"`
+  - `"education"`
+  - `"business"`
+  - `"vacation/others"`
+</ParamField>
+
+## Response
+
+Returns `200 OK` with a JSON object on success.
+
+<ResponseField name="prediction" type="string">
+  Credit risk classification for the applicant. Either `"good"` or `"bad"`.
+</ResponseField>
+
+<ResponseField name="probability" type="number">
+  Model confidence score for a `"good"` prediction, expressed as a float between `0.0` and `1.0`.
+</ResponseField>
+
+## Examples
+
+### Example 1 — car loan
+
+<RequestExample>
+
+```bash cURL
+curl -X 'POST' \
+  'http://localhost:8000/mlp_demo' \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "Age": 35,
+    "Sex": "male",
+    "Job": 2,
+    "Housing": "own",
+    "Saving accounts": "little",
+    "Checking account": "moderate",
+    "Credit amount": 2500,
+    "Duration": 24,
+    "Purpose": "car"
+  }'
+```
+
+</RequestExample>
+
+<ResponseExample>
+
+```json 200
+{
+  "prediction": "good",
+  "probability": 0.7852
+}
+```
+
+</ResponseExample>
+
+### Example 2 — education loan (schema_extra)
+
+```bash
+curl -X 'POST' \
+  'http://localhost:8000/mlp_demo' \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "Age": 35,
+    "Sex": "male",
+    "Job": 1,
+    "Housing": "free",
+    "Saving accounts": "NA",
+    "Checking account": "NA",
+    "Credit amount": 9055,
+    "Duration": 36,
+    "Purpose": "education"
+  }'
+```
+
+## Error responses
+
+| Status | Description |
+|---|---|
+| `422 Unprocessable Entity` | Request body failed schema validation. The response body includes field-level error details from Pydantic. |
+| `500 Internal Server Error` | An unexpected error occurred during inference. The error is logged server-side. The response body includes a `detail` field with a description of the error. |
+
+<Warning>
+  A `500` response indicates a problem in the prediction pipeline (model loading, preprocessing, or inference). Check the server logs for the full traceback.
+</Warning>

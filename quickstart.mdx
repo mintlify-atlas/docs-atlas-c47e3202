@@ -1,80 +1,155 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Get a deep learning service running locally in under 5 minutes"
 ---
 
-## Get started in three steps
+This guide walks you through running the **Credit Scoring** service — a credit risk prediction API backed by a PyTorch MLP model. By the end you will have a working REST endpoint on your machine.
 
-Get your documentation site running locally and make your first customization.
+<Note>
+  All commands run from the repository root (`deep_learning_services/`). Make sure you are in that directory before executing any `docker build` or `docker run` commands.
+</Note>
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+Before you begin, ensure the following tools are installed:
 
-### Step 2: Deploy your changes
+| Tool | Minimum version | Install guide |
+|------|----------------|---------------|
+| Docker | 24.x | [docs.docker.com](https://docs.docker.com/get-docker/) |
+| Git | 2.x | [git-scm.com](https://git-scm.com/downloads) |
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+## Run the Credit Scoring service
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+<Steps>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+<Step title="Clone the repository">
 
-### Step 3: Go live
+```bash
+git clone https://github.com/AprendeIngenia/deep_learning_services.git
+cd deep_learning_services
+```
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+</Step>
+
+<Step title="Build the Docker image">
+
+Run the following command from the repository root. The build uses the optimized multi-stage Dockerfile in `container-images/credit_scoring_service/`.
+
+```bash
+docker build -t ingeniia/credit-scoring-mlp:1.0 -f container-images/credit_scoring_service/Dockerfile .
+```
+
+<Tip>
+  The first build takes a few minutes while Docker pulls the base image and installs Python dependencies. Subsequent builds are faster thanks to layer caching.
+</Tip>
+
+</Step>
+
+<Step title="Run the container">
+
+Start the service in detached mode and bind it to port `8000` on your host:
+
+```bash
+docker run -d -p 8000:8080 --name credit-scoring-service ingeniia/credit-scoring-mlp:1.0
+```
+
+Confirm the container is healthy by tailing its logs:
+
+```bash
+docker logs -f credit-scoring-service
+```
+
+You should see Uvicorn report that the application started successfully.
+
+</Step>
+
+<Step title="Explore the interactive docs">
+
+Open your browser and navigate to:
+
+```
+http://localhost:8000/docs
+```
+
+FastAPI automatically generates a Swagger UI where you can inspect the `/mlp_demo` endpoint and try it out interactively without writing any code.
+
+</Step>
+
+<Step title="Make your first prediction">
+
+Send a POST request to `/mlp_demo` with an applicant's financial profile:
+
+```bash
+curl -X 'POST' \
+  'http://localhost:8000/mlp_demo' \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "Age": 35,
+  "Sex": "male",
+  "Job": 2,
+  "Housing": "own",
+  "Saving accounts": "little",
+  "Checking account": "moderate",
+  "Credit amount": 2500,
+  "Duration": 24,
+  "Purpose": "car"
+}'
+```
+
+</Step>
+
+<Step title="Verify the response">
+
+A successful prediction returns HTTP `200 OK` with the following JSON body:
+
+```json
+{
+  "prediction": "good",
+  "probability": 0.7852
+}
+```
+
+- **`prediction`** — `"good"` or `"bad"` credit risk classification produced by the MLP model.
+- **`probability`** — confidence score that the applicant falls into the `"good"` category (range: 0 – 1).
+
+</Step>
+
+</Steps>
+
+## Manage the container
+
+A few useful commands for the container lifecycle:
+
+```bash
+# Stream logs in real time
+docker logs -f credit-scoring-service
+
+# Stop the service
+docker stop credit-scoring-service
+
+# Restart a stopped container
+docker start credit-scoring-service
+
+# Remove the container entirely
+docker stop credit-scoring-service && docker rm credit-scoring-service
+```
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
+Explore the other services and learn how everything fits together.
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Credit Scoring" icon="coins" href="/services/credit-scoring">
+    Deep-dive into the MLP model, Pydantic schemas, and the scikit-learn preprocessing pipeline.
+  </Card>
+  <Card title="X-Ray Evaluation" icon="lungs" href="/services/xray-evaluation">
+    Classify chest X-rays and generate GradCAM heatmaps with YOLOv11-cls.
+  </Card>
+  <Card title="Smart Checkout" icon="cart-shopping" href="/services/smart-checkout">
+    Real-time object detection over WebSockets with YOLO26 and GPU support.
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    Understand the monorepo layout, shared patterns, and the GCP deployment pipeline.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

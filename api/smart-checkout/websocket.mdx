@@ -1,0 +1,186 @@
+---
+title: "WebSocket /ws/smart_checkout"
+description: "Stream video frames for real-time product detection"
+---
+
+The `/ws/smart_checkout` endpoint accepts a continuous stream of binary video frames and returns JSON detection results for each frame. A single persistent connection is used for the entire session.
+
+## Connection
+
+**Endpoint:** `ws://localhost:8080/ws/smart_checkout`
+
+**Message type:** Binary (`ArrayBuffer`)
+
+The server accepts the connection immediately and begins processing frames as they arrive. There is no handshake message or session initialization required after the WebSocket connection is established.
+
+<Note>
+GPU inference is protected by an `asyncio.Lock()`. If multiple clients are connected simultaneously, frames are processed one at a time on the GPU to prevent race conditions. This does not disconnect clients — requests are queued.
+</Note>
+
+## Message format (client → server)
+
+Each message must be a binary `ArrayBuffer` with the following exact structure:
+
+| Bytes  | Type                        | Description                                        |
+| ------ | --------------------------- | -------------------------------------------------- |
+| 0–7    | `uint64` (Little-Endian)    | `frame_id` — typically a Unix timestamp in milliseconds |
+| 8+     | Raw bytes                   | JPEG-encoded image                                 |
+
+The header format is defined in `src/server/protocol.py` as struct format `"<Q"` (unsigned 64-bit integer, little-endian). The minimum valid message length is 8 bytes (header only), though a message with no image bytes will fail to decode as a JPEG.
+
+<Warning>
+Messages larger than `SC_MAX_FRAME_BYTES` (default 2,500,000 bytes, ~2.5 MB) are rejected without running inference. The server sends an error response and continues listening.
+</Warning>
+
+### JavaScript example
+
+```javascript
+// Example: sending a frame via WebSocket
+const canvas = document.getElementById('videoCanvas');
+canvas.toBlob(async (blob) => {
+  const imageBytes = await blob.arrayBuffer();
+  const frameId = BigInt(Date.now());
+  const header = new ArrayBuffer(8);
+  new DataView(header).setBigUint64(0, frameId, true); // Little-Endian
+  const message = new Uint8Array(header.byteLength + imageBytes.byteLength);
+  message.set(new Uint8Array(header), 0);
+  message.set(new Uint8Array(imageBytes), 8);
+  websocket.send(message);
+}, 'image/jpeg', 0.8);
+```
+
+## Response format (server → client)
+
+The server responds to each frame with a UTF-8 JSON string. The response schema is defined in `src/server/schemas.py` as `CheckoutResponse`.
+
+<ResponseField name="frame_id" type="integer" required>
+  The `frame_id` from the client's request header. Use this to correlate responses with the original frames, especially when sending frames faster than the server can process them.
+</ResponseField>
+
+<ResponseField name="server_time" type="integer" required>
+  Unix timestamp in milliseconds recorded by the server when the response was generated.
+</ResponseField>
+
+<ResponseField name="inference_time" type="float" required>
+  Time taken to run model inference, in milliseconds. Does not include network transfer time.
+</ResponseField>
+
+<ResponseField name="img_size" type="integer[]" required>
+  The dimensions of the image as processed by the model, in the format `[width, height]`.
+</ResponseField>
+
+<ResponseField name="detections" type="Detection[]" required>
+  Array of detected objects in the frame. May be empty if no products were detected above the confidence threshold.
+
+  <Expandable title="Detection object">
+    <ResponseField name="class_id" type="integer" required>
+      Numeric class index as assigned during model training.
+    </ResponseField>
+
+    <ResponseField name="class_name" type="string" required>
+      Human-readable class label (e.g., `"manzana roja"`). This name is used to look up the product in the catalog.
+    </ResponseField>
+
+    <ResponseField name="confidence" type="float" required>
+      Detection confidence score between 0 and 1. Only detections above `SC_CONFIDENCE_THRESHOLD` (default `0.55`) are included.
+    </ResponseField>
+
+    <ResponseField name="bbox_norm" type="float[]" required>
+      Normalized bounding box in the format `[cx, cy, w, h]`, where all values are relative to the image dimensions (0.0–1.0):
+      - `cx` — center x coordinate
+      - `cy` — center y coordinate
+      - `w` — box width
+      - `h` — box height
+    </ResponseField>
+
+    <ResponseField name="product_info" type="object">
+      Product metadata from `config/products.yaml`. `null` if the detected class name has no matching entry in the catalog.
+
+      <Expandable title="ProductInfo object">
+        <ResponseField name="sku" type="string" required>
+          Stock-keeping unit identifier (e.g., `"FRU-APL-001"`).
+        </ResponseField>
+
+        <ResponseField name="name" type="string" required>
+          Display name of the product (e.g., `"Manzana roja"`).
+        </ResponseField>
+
+        <ResponseField name="price" type="float" required>
+          Unit price of the product.
+        </ResponseField>
+
+        <ResponseField name="currency" type="string" required>
+          Currency code for the price (e.g., `"USD"`).
+        </ResponseField>
+
+        <ResponseField name="description" type="string" required>
+          Short description of the product.
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="extra" type="object">
+  Additional metadata attached to the response. Currently includes `total_items` (integer), which is the count of detections in the frame.
+</ResponseField>
+
+### Example response
+
+```json
+{
+  "frame_id": 1708453456789,
+  "server_time": 1708453456810,
+  "inference_time": 15.4,
+  "img_size": [640, 640],
+  "detections": [
+    {
+      "class_id": 2,
+      "class_name": "manzana roja",
+      "confidence": 0.94,
+      "bbox_norm": [0.45, 0.60, 0.12, 0.15],
+      "product_info": {
+        "sku": "FRU-APL-001",
+        "name": "Manzana roja",
+        "price": 0.35,
+        "currency": "USD",
+        "description": "Manzana roja fresca"
+      }
+    }
+  ],
+  "extra": {
+    "total_items": 1
+  }
+}
+```
+
+## Error responses
+
+When a frame cannot be processed, the server sends a JSON error object and continues listening for subsequent frames. The connection is not closed on per-frame errors.
+
+| `error` value         | When it occurs                                                                                      |
+| --------------------- | --------------------------------------------------------------------------------------------------- |
+| `frame_too_large`     | The binary message exceeds `SC_MAX_FRAME_BYTES`. The `limit` field in the response contains the configured byte limit. |
+| `bad_message`         | The binary message could not be parsed — for example, the message is shorter than 8 bytes.         |
+| `image_decode_failed` | The bytes following the header could not be decoded as a JPEG image.                                |
+| `inference_error`     | Model inference raised an unexpected exception. The error detail is included in the `error` string. |
+
+### Error response shape
+
+```json
+{
+  "frame_id": -1,
+  "error": "frame_too_large",
+  "limit": 2500000
+}
+```
+
+For `bad_message` and `inference_error`, `frame_id` is either `-1` (if the frame ID could not be parsed) or the original `frame_id` from the header. The `error` field includes a detail string appended after the error type (e.g., `"bad_message: Mensaje demasiado corto para header."`).
+
+<Tip>
+Use the `frame_id` field in both successful and error responses to match results to the originating frame, particularly when sending frames at high frequency.
+</Tip>
+
+## Connection lifecycle
+
+The server closes the connection with WebSocket code `1011` (Internal Error) only if an unhandled exception occurs at the connection level. Per-frame errors do not close the connection. Normal client disconnections (e.g., closing the browser tab) are handled gracefully.

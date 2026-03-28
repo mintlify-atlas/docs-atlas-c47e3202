@@ -1,0 +1,63 @@
+---
+title: "Introduction"
+description: "Production-ready deep learning microservices for credit scoring, medical imaging, and real-time object detection."
+---
+
+Deep Learning Services is a collection of three production-grade AI microservices built as part of the [inGeniia.co](https://www.ingeniia.co) Deep Learning course. Each service wraps a trained neural network in a FastAPI application, containerized with Docker and deployable to Google Cloud Run.
+
+This is not a collection of Jupyter notebooks — it is structured, MLOps-grade code designed to run in the cloud.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run your first inference in under 5 minutes
+  </Card>
+  <Card title="Architecture" icon="diagram-project" href="/architecture">
+    Understand how the services are structured
+  </Card>
+  <Card title="Services" icon="cubes" href="/services/credit-scoring">
+    Explore Credit Scoring, X-Ray Evaluation, and Smart Checkout
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/credit-scoring/overview">
+    Full endpoint documentation for all three services
+  </Card>
+</CardGroup>
+
+## The three services
+
+<CardGroup cols={3}>
+  <Card title="Credit Scoring" icon="coins" href="/services/credit-scoring">
+    Predict credit risk (good/bad) from applicant financial data using a PyTorch MLP neural network.
+  </Card>
+  <Card title="X-Ray Evaluation" icon="x-ray" href="/services/xray-evaluation">
+    Classify chest X-rays as Normal or Anomaly using YOLOv11-cls and generate GradCAM explainability heatmaps.
+  </Card>
+  <Card title="Smart Checkout" icon="cart-shopping" href="/services/smart-checkout">
+    Detect and price grocery products in real-time video streams via WebSocket using YOLO26 on GPU.
+  </Card>
+</CardGroup>
+
+## Key capabilities
+
+- **FastAPI** — High-performance REST and WebSocket endpoints with auto-generated Swagger docs
+- **Pydantic validation** — Strict type-safe request/response schemas for all services
+- **Docker** — Multi-stage, optimized container images ready for cloud deployment
+- **Google Cloud Run** — Serverless, auto-scaling deployment with CI/CD via Cloud Build
+- **GradCAM explainability** — Visual heatmaps showing model attention regions for X-ray classification
+- **GPU inference** — WebSocket-based real-time detection with CUDA support in the Smart Checkout service
+
+## Project structure
+
+```text
+deep_learning_services/
+├── container-images/       # Optimized Dockerfiles for each service
+├── ops/                    # Cloud Build CI/CD manifests for GCP
+├── python/
+│   ├── credit_scoring/     # MLP credit risk prediction service
+│   ├── xrays_evaluation/   # CNN chest X-ray classification service
+│   └── smart_checkout/     # YOLO real-time object detection service
+└── cloudbuild.yaml         # Root-level Cloud Build trigger
+```
+
+<Note>
+  All three services are independent microservices. You can deploy any one of them without the others.
+</Note>

@@ -1,0 +1,130 @@
+---
+title: "Datasets"
+description: "Training datasets used for the deep learning models, available on HuggingFace"
+---
+
+All training datasets are published on HuggingFace under the **inGeniia** organization and correspond directly to the three deep learning services in this project.
+
+<CardGroup cols={3}>
+  <Card
+    title="German Credit Risk"
+    icon="table"
+    href="https://huggingface.co/datasets/inGeniia/german-credit-risk_credit-scoring_mlp"
+  >
+    Tabular credit risk data for the MLP classifier. 9 input features, binary labels.
+  </Card>
+  <Card
+    title="Chest X-Rays"
+    icon="x-ray"
+    href="https://huggingface.co/datasets/inGeniia/chest-xrays-evaluation_cnn-cls"
+  >
+    Chest radiograph images for anomaly detection. Binary labels: Normal / Anomaly.
+  </Card>
+  <Card
+    title="Multiple Objects"
+    icon="barcode"
+    href="https://huggingface.co/datasets/inGeniia/multiple-objects_smart-checkout_cnn-det"
+  >
+    Multi-class grocery product detection dataset with bounding box annotations.
+  </Card>
+</CardGroup>
+
+---
+
+## German Credit Risk
+
+**Model:** Credit Scoring — MLP
+**HuggingFace:** [`inGeniia/german-credit-risk_credit-scoring_mlp`](https://huggingface.co/datasets/inGeniia/german-credit-risk_credit-scoring_mlp)
+
+This dataset contains demographic and financial records of loan applicants. It is used to train the PyTorch MLP that classifies applicants as good or bad credit risks.
+
+### Features
+
+| Feature | Type | Description |
+|---------|------|-------------|
+| `Age` | integer | Applicant age in years |
+| `Sex` | categorical | `male` / `female` |
+| `Job` | integer (0–3) | Job skill level (0 = unskilled, 3 = highly skilled) |
+| `Housing` | categorical | `own` / `free` / `rent` |
+| `Saving accounts` | categorical | `little` / `moderate` / `quite rich` / `rich` |
+| `Checking account` | categorical | `little` / `moderate` / `rich` |
+| `Credit amount` | integer | Loan amount in Deutsche Mark |
+| `Duration` | integer | Loan duration in months |
+| `Purpose` | categorical | Loan purpose (e.g., `car`, `education`, `business`) |
+
+### Labels
+
+| Label | Meaning |
+|-------|---------|
+| `good` | Low credit risk — likely to repay |
+| `bad` | High credit risk — likely to default |
+
+### Preprocessing
+
+Raw categorical columns are one-hot encoded using a scikit-learn pipeline fitted on the training split and serialized to `german_credit_risk_preprocessor.joblib`. After encoding, the feature vector expands from 9 raw columns to **26 numeric dimensions** that are fed into the MLP.
+
+<Note>
+  The preprocessor is versioned alongside the model weights. Always use the matching `.joblib` file for the deployed `.pt` checkpoint to ensure consistent feature transformations.
+</Note>
+
+---
+
+## Chest X-Rays
+
+**Model:** X-Ray Evaluation — YOLOv11-cls
+**HuggingFace:** [`inGeniia/chest-xrays-evaluation_cnn-cls`](https://huggingface.co/datasets/inGeniia/chest-xrays-evaluation_cnn-cls)
+
+This dataset consists of chest radiograph images used to train the YOLOv11 classification model. Images are supplied to the service as Base64-encoded strings and decoded server-side using OpenCV before inference.
+
+### Labels
+
+| Class ID | Label | Description |
+|----------|-------|-------------|
+| `0` | `Anomaly` | Radiograph shows signs of a pulmonary abnormality |
+| `1` | `Normal` | Radiograph appears within normal parameters |
+
+### Image characteristics
+
+- Format: JPEG / PNG
+- Color space: BGR (OpenCV convention) after decoding
+- Preprocessing: decoded from Base64, passed directly to the Ultralytics `YOLO.predict()` pipeline which handles internal resizing and normalization
+
+<Warning>
+  This dataset and the resulting model are intended for **educational and research purposes only**. They are not validated for use as a clinical diagnostic tool. Always consult a qualified radiologist for medical interpretation.
+</Warning>
+
+---
+
+## Multiple Objects
+
+**Model:** Smart Checkout — YOLOv26m
+**HuggingFace:** [`inGeniia/multiple-objects_smart-checkout_cnn-det`](https://huggingface.co/datasets/inGeniia/multiple-objects_smart-checkout_cnn-det)
+
+This dataset contains images of grocery products annotated with bounding boxes and class labels. It is used to train the YOLOv26m detection model that powers the autonomous checkout service.
+
+### Detected classes
+
+The trained model maps detections to the following product catalog (`config/products.yaml`, v1.0.0):
+
+| Class name | SKU | Category |
+|------------|-----|----------|
+| `caja cereal` | `FOO-CER-001` | Food |
+| `soda` | `DRI-SOD-001` | Drink |
+| `manzana roja` | `FRU-APL-001` | Fruit |
+| `zanahoria` | `FRU-CAR-001` | Vegetable |
+| `cepillo dental` | `HYG-TBR-001` | Hygiene |
+| `papel higienico` | `HYG-TPR-001` | Hygiene |
+| `gafas` | `ACC-GLA-001` | Accessory |
+| `gorra` | `ACC-CAP-001` | Accessory |
+
+### Annotation format
+
+Bounding boxes are stored in **YOLO normalized format** (`cx cy w h`, values in `[0, 1]`). During inference the model returns detections as `xywhn` (center x, center y, width, height — all normalized to the input image dimensions).
+
+### Inference constraints
+
+Images are processed as JPEG frames delivered over a WebSocket binary protocol. The model was trained at **640 × 640** resolution, which is also the `img_size` used at inference time. Frames outside this resolution are automatically resized by the Ultralytics pipeline.
+
+<Tip>
+  To add new product classes, retrain the model on an extended version of this dataset and update `config/products.yaml` with the corresponding SKU and pricing metadata. No code changes are required — the catalog is loaded at startup and resolved by class name at inference time.
+</Tip>

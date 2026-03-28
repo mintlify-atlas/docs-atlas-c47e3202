@@ -1,0 +1,239 @@
+---
+title: "CI/CD pipeline"
+description: "Automated build and deployment using Google Cloud Build"
+---
+
+## Pipeline overview
+
+Every service follows the same four-stage pipeline. A push to GitHub triggers Cloud Build, which builds the Docker image, pushes it to Artifact Registry, and deploys the new revision to Cloud Run — all without manual intervention.
+
+<Steps>
+  <Step title="Push to GitHub">
+    A developer pushes commits to the repository. A Cloud Build trigger watches for changes and starts a new build automatically.
+  </Step>
+  <Step title="Docker build">
+    Cloud Build pulls the repository and runs `docker build` using the Dockerfile in `container-images/<service>/Dockerfile`. The build context is the repository root, so all `python/` source code and model artifacts are available.
+
+    Images are tagged with `${SHORT_SHA}`, the short Git commit hash injected by Cloud Build. This makes every image traceable to its source commit.
+  </Step>
+  <Step title="Push to Artifact Registry">
+    The built image is pushed to the project's Artifact Registry repository:
+
+    ```
+    us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/<service-name>:${SHORT_SHA}
+    ```
+  </Step>
+  <Step title="Deploy to Cloud Run">
+    Cloud Build calls `gcloud run deploy` to update the Cloud Run service to the new image. Configuration flags (memory, CPU, GPU, region, service account) are defined directly in the Cloud Build YAML — no separate `gcloud` commands are needed.
+  </Step>
+</Steps>
+
+## Cloud Build files
+
+There are four Cloud Build YAML files in the repository. Three are service-specific; one is a root-level file that targets Credit Scoring.
+
+| File | Service deployed |
+|---|---|
+| `cloudbuild.yaml` (root) | `credit-scoring-service` |
+| `ops/cloudbuild-credit_scoring_service.yaml` | `credit-scoring-service` |
+| `ops/cloudbuild-xrays_evaluation_service.yaml` | `xrays-evaluation-service` |
+| `ops/cloudbuild-smart_checkout_service.yaml` | `smart-checkout-service` |
+
+### Root `cloudbuild.yaml`
+
+The root file deploys `credit-scoring-service` and is the default file picked up when no `--config` flag is specified in a trigger.
+
+```yaml
+steps:
+  # Step 1: Build the image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/credit-scoring-service:${SHORT_SHA}'
+      - '--file=container-images/credit_scoring/Dockerfile'
+      - '.'
+
+  # Step 2: Push the image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/credit-scoring-service:${SHORT_SHA}'
+
+  # Step 3: Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'credit-scoring-service'
+      - '--port=8080'
+      - '--image=us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/credit-scoring-service:${SHORT_SHA}'
+      - '--platform=managed'
+      - '--region=us-central1'
+      - '--service-account=credit-scoring-sa@${PROJECT_ID}.iam.gserviceaccount.com'
+      - '--allow-unauthenticated'
+      - '--memory=1Gi'
+
+options:
+  diskSizeGb: 100
+  logging: CLOUD_LOGGING_ONLY
+```
+
+### `ops/cloudbuild-credit_scoring_service.yaml`
+
+Mirrors the root file but references the Dockerfile at `container-images/credit_scoring_service/Dockerfile`. Use this file when configuring a dedicated trigger for the Credit Scoring service.
+
+```yaml
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/credit-scoring-service:${SHORT_SHA}'
+      - '--file=container-images/credit_scoring_service/Dockerfile'
+      - '.'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/credit-scoring-service:${SHORT_SHA}'
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'credit-scoring-service'
+      - '--port=8080'
+      - '--image=us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/credit-scoring-service:${SHORT_SHA}'
+      - '--platform=managed'
+      - '--region=us-central1'
+      - '--service-account=credit-scoring-sa@${PROJECT_ID}.iam.gserviceaccount.com'
+      - '--allow-unauthenticated'
+      - '--memory=1Gi'
+
+options:
+  diskSizeGb: 100
+  logging: CLOUD_LOGGING_ONLY
+```
+
+### `ops/cloudbuild-xrays_evaluation_service.yaml`
+
+```yaml
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/xrays-evaluation-service:${SHORT_SHA}'
+      - '--file=container-images/xrays_evaluation_service/Dockerfile'
+      - '.'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/xrays-evaluation-service:${SHORT_SHA}'
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'xrays-evaluation-service'
+      - '--port=8080'
+      - '--image=us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/xrays-evaluation-service:${SHORT_SHA}'
+      - '--platform=managed'
+      - '--region=us-central1'
+      - '--service-account=xrays-evaluation-sa@${PROJECT_ID}.iam.gserviceaccount.com'
+      - '--allow-unauthenticated'
+      - '--memory=8Gi'
+      - '--cpu=2'
+
+options:
+  diskSizeGb: 100
+  logging: CLOUD_LOGGING_ONLY
+```
+
+### `ops/cloudbuild-smart_checkout_service.yaml`
+
+This file includes additional flags for GPU provisioning and a larger builder machine.
+
+```yaml
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/smart-checkout-service:${SHORT_SHA}'
+      - '--file=container-images/smart_checkout_service/Dockerfile'
+      - '.'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/smart-checkout-service:${SHORT_SHA}'
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'smart-checkout-service'
+      - '--image=us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/smart-checkout-service:${SHORT_SHA}'
+      - '--service-account=smart-checkout-sa@${PROJECT_ID}.iam.gserviceaccount.com'
+      - '--port=8080'
+      - '--region=us-east4'
+      - '--no-gpu-zonal-redundancy'
+      - '--allow-unauthenticated'
+      - '--gpu=1'
+      - '--gpu-type=nvidia-l4'
+      - '--cpu=4'
+      - '--memory=16Gi'
+      - '--max-instances=2'
+      - '--min-instances=0'
+      - '--concurrency=20'
+      - '--timeout=600'
+      - '--set-env-vars=SC_DEVICE=cuda:0,PYTORCH_CUDA_ALLOC_CONF=garbage_collection_threshold:0.6,YOLO_CONFIG_DIR=/tmp/Ultralytics'
+
+options:
+  machineType: 'E2_HIGHCPU_8'
+  diskSizeGb: 100
+  logging: CLOUD_LOGGING_ONLY
+```
+
+<Warning>
+  Smart Checkout requires an NVIDIA L4 GPU quota in `us-east4`. Ensure you have requested sufficient quota before triggering a build for this service. See [Google Cloud Run GPU docs](https://cloud.google.com/run/docs/configuring/services/gpu) for details.
+</Warning>
+
+## Build variables
+
+Cloud Build injects the following substitution variables at build time. You do not need to set them manually.
+
+| Variable | Source | Example value |
+|---|---|---|
+| `${PROJECT_ID}` | GCP project of the build | `my-gcp-project` |
+| `${SHORT_SHA}` | Short Git commit hash | `a1b2c3d` |
+
+## Service accounts
+
+Each service runs under a dedicated service account. These must exist in your GCP project before the first deployment.
+
+| Service | Service account |
+|---|---|
+| Credit Scoring | `credit-scoring-sa@${PROJECT_ID}.iam.gserviceaccount.com` |
+| X-Ray Evaluation | `xrays-evaluation-sa@${PROJECT_ID}.iam.gserviceaccount.com` |
+| Smart Checkout | `smart-checkout-sa@${PROJECT_ID}.iam.gserviceaccount.com` |
+
+<Note>
+  Grant each service account only the permissions it needs (principle of least privilege). At minimum, the Cloud Build service account requires the **Cloud Run Admin** and **Service Account User** roles to deploy and impersonate the runtime service accounts.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="Google Cloud Run deployment" icon="cloud" href="/deployment/gcp-cloud-run">
+    Review the per-service Cloud Run configuration details.
+  </Card>
+  <Card title="Docker deployment" icon="docker" href="/deployment/docker">
+    Build and test each service locally before pushing to the pipeline.
+  </Card>
+</CardGroup>

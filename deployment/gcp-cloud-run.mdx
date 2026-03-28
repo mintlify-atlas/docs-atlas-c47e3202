@@ -1,0 +1,151 @@
+---
+title: "Google Cloud Run deployment"
+description: "Deploy services to Google Cloud Run with serverless auto-scaling"
+---
+
+## Architecture
+
+Each service is deployed as an **independent Cloud Run service** with its own compute profile, region, and service account. Container images are stored in Artifact Registry and referenced by the immutable `${SHORT_SHA}` tag injected by Cloud Build.
+
+```
+Artifact Registry
+us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/
+├── credit-scoring-service:<SHORT_SHA>
+├── xrays-evaluation-service:<SHORT_SHA>
+└── smart-checkout-service:<SHORT_SHA>
+```
+
+The CI/CD pipeline (Cloud Build) handles building, pushing, and deploying each image automatically. For the full pipeline description, see [CI/CD pipeline](/deployment/ci-cd).
+
+## Service configurations
+
+<Tabs>
+  <Tab title="Credit Scoring">
+    **Cloud Run service name:** `credit-scoring-service`
+
+    | Parameter | Value |
+    |---|---|
+    | Region | `us-central1` |
+    | Port | `8080` |
+    | Memory | `1Gi` |
+    | Authentication | `--allow-unauthenticated` |
+    | Service account | `credit-scoring-sa@${PROJECT_ID}.iam.gserviceaccount.com` |
+
+    The full `gcloud run deploy` command used by Cloud Build:
+
+    ```bash
+    gcloud run deploy credit-scoring-service \
+      --port=8080 \
+      --image=us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/credit-scoring-service:${SHORT_SHA} \
+      --platform=managed \
+      --region=us-central1 \
+      --service-account=credit-scoring-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+      --allow-unauthenticated \
+      --memory=1Gi
+    ```
+  </Tab>
+
+  <Tab title="X-Ray Evaluation">
+    **Cloud Run service name:** `xrays-evaluation-service`
+
+    CNN inference with GradCAM requires substantially more compute than the MLP service.
+
+    | Parameter | Value |
+    |---|---|
+    | Region | `us-central1` |
+    | Port | `8080` |
+    | CPU | `2` vCPU |
+    | Memory | `8Gi` |
+    | Authentication | `--allow-unauthenticated` |
+    | Service account | `xrays-evaluation-sa@${PROJECT_ID}.iam.gserviceaccount.com` |
+
+    The full `gcloud run deploy` command used by Cloud Build:
+
+    ```bash
+    gcloud run deploy xrays-evaluation-service \
+      --port=8080 \
+      --image=us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/xrays-evaluation-service:${SHORT_SHA} \
+      --platform=managed \
+      --region=us-central1 \
+      --service-account=xrays-evaluation-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+      --allow-unauthenticated \
+      --memory=8Gi \
+      --cpu=2
+    ```
+  </Tab>
+
+  <Tab title="Smart Checkout">
+    **Cloud Run service name:** `smart-checkout-service`
+
+    <Warning>
+      Smart Checkout requires an **NVIDIA L4 GPU quota** in `us-east4`. GPU-enabled Cloud Run is a limited feature — request quota increases in the Google Cloud console before deploying. GPU availability may vary by zone, so `--no-gpu-zonal-redundancy` is required.
+    </Warning>
+
+    This service runs real-time YOLO object detection over WebSockets with CUDA acceleration. Its resource profile is significantly larger than the other two services.
+
+    | Parameter | Value |
+    |---|---|
+    | Region | `us-east4` |
+    | Port | `8080` |
+    | GPU type | `nvidia-l4` |
+    | GPU count | `1` |
+    | CPU | `4` vCPU |
+    | Memory | `16Gi` |
+    | Concurrency | `20` WebSocket connections per container |
+    | Min instances | `0` (scale to zero) |
+    | Max instances | `2` |
+    | Timeout | `600s` (required for long-lived WebSocket connections) |
+    | Authentication | `--allow-unauthenticated` |
+    | Service account | `smart-checkout-sa@${PROJECT_ID}.iam.gserviceaccount.com` |
+
+    The full `gcloud run deploy` command used by Cloud Build:
+
+    ```bash
+    gcloud run deploy smart-checkout-service \
+      --image=us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/smart-checkout-service:${SHORT_SHA} \
+      --service-account=smart-checkout-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+      --port=8080 \
+      --region=us-east4 \
+      --no-gpu-zonal-redundancy \
+      --allow-unauthenticated \
+      --gpu=1 \
+      --gpu-type=nvidia-l4 \
+      --cpu=4 \
+      --memory=16Gi \
+      --max-instances=2 \
+      --min-instances=0 \
+      --concurrency=20 \
+      --timeout=600 \
+      --set-env-vars=SC_DEVICE=cuda:0,PYTORCH_CUDA_ALLOC_CONF=garbage_collection_threshold:0.6,YOLO_CONFIG_DIR=/tmp/Ultralytics
+    ```
+
+    <Note>
+      The Cloud Build machine type for this service is `E2_HIGHCPU_8` with a 100 GB disk. The CUDA base image is large; standard Cloud Build workers do not have enough disk space to extract all image layers.
+    </Note>
+  </Tab>
+</Tabs>
+
+## Artifact Registry image paths
+
+All images follow the same naming pattern:
+
+```
+us-central1-docker.pkg.dev/${PROJECT_ID}/ingeniia-services/<service-name>:<SHORT_SHA>
+```
+
+| Service | Image name |
+|---|---|
+| Credit Scoring | `credit-scoring-service` |
+| X-Ray Evaluation | `xrays-evaluation-service` |
+| Smart Checkout | `smart-checkout-service` |
+
+`${PROJECT_ID}` and `${SHORT_SHA}` are substitution variables injected automatically by Cloud Build at build time.
+
+<CardGroup cols={2}>
+  <Card title="CI/CD pipeline" icon="arrow-right-arrow-left" href="/deployment/ci-cd">
+    Automate builds and deployments with Cloud Build triggers on GitHub push.
+  </Card>
+  <Card title="Docker deployment" icon="docker" href="/deployment/docker">
+    Build and run each service locally with Docker before deploying to GCP.
+  </Card>
+</CardGroup>

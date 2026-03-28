@@ -1,0 +1,122 @@
+---
+title: "Smart Checkout API"
+description: "Real-time object detection via WebSocket for autonomous checkout"
+---
+
+Smart Checkout is a microservice that performs real-time multi-product detection using a YOLO26-based convolutional neural network. It is designed to simulate an autonomous supermarket checkout: a client streams video frames, and the server responds with detected products, confidence scores, bounding boxes, and enriched product catalog data.
+
+## Base URLs
+
+| Protocol  | Base URL                      | Purpose                        |
+| --------- | ----------------------------- | ------------------------------ |
+| WebSocket | `ws://localhost:8080`         | Real-time inference stream     |
+| HTTP      | `http://localhost:8080`       | Health checks and documentation |
+
+<Note>
+The default port in `config/settings.py` is `8000`. The Docker container maps it to `8080` (`-p 8080:8080`). Use `8080` when running via Docker, or `8000` when running the server directly.
+</Note>
+
+## Why WebSocket instead of REST?
+
+Traditional REST APIs require a full HTTP round-trip per request — including headers, connection negotiation, and response framing — for every frame submitted. At video frame rates (15–30 fps), this overhead accumulates and becomes a bottleneck.
+
+This service uses a persistent WebSocket connection to eliminate that overhead:
+
+- **No per-frame HTTP headers:** Once the connection is established, each message is a raw binary frame with an 8-byte header.
+- **Bidirectional streaming:** The server can respond as soon as inference is complete, without the client polling.
+- **Lower latency:** The binary protocol (`[8-byte frame_id] + [JPEG bytes]`) is more compact than JSON or Base64-encoded REST payloads, reducing both bandwidth and processing time.
+
+## Available endpoints
+
+| Method    | Path                  | Description                                      |
+| --------- | --------------------- | ------------------------------------------------ |
+| `GET`     | `/`                   | Redirects to `/docs` (Swagger UI)                |
+| `GET`     | `/health`             | Returns service status, model name, and device   |
+| WebSocket | `/ws/smart_checkout`  | Real-time object detection stream                |
+
+### GET /health
+
+Returns the current status of the service and whether the inference model is loaded in memory.
+
+**Example response**
+
+```json
+{
+  "status": "ok",
+  "service": "smart_checkout_ws",
+  "model": "smart_checkout_model_small_v1.pt",
+  "device": "cuda:0"
+}
+```
+
+<ResponseField name="status" type="string" required>
+  `"ok"` if the model is loaded and ready. `"not_ready"` if the model failed to load or is unavailable.
+</ResponseField>
+
+<ResponseField name="service" type="string" required>
+  The service name. Always `"smart_checkout_ws"`.
+</ResponseField>
+
+<ResponseField name="model" type="string" required>
+  The filename of the loaded detection model (e.g., `"smart_checkout_model_small_v1.pt"`).
+</ResponseField>
+
+<ResponseField name="device" type="string" required>
+  The compute device in use (e.g., `"cuda:0"`).
+</ResponseField>
+
+## Authentication
+
+No authentication is required. This service is intended to be deployed behind a network boundary or API gateway that handles access control.
+
+## CORS
+
+The following origins are allowed by the server's CORS middleware:
+
+| Origin                           |
+| -------------------------------- |
+| `http://localhost`               |
+| `http://localhost:3000`          |
+| `http://localhost:8080`          |
+| `http://127.0.0.1:5500`          |
+| `https://www.ingeniia.co`        |
+| `https://platform.ingeniia.co`   |
+
+All HTTP methods and headers are permitted for these origins.
+
+## Configuration
+
+The service is configured via environment variables using the `SC_` prefix, or via a `.env` file in the working directory. All settings are defined in `config/settings.py`.
+
+| Environment variable       | Type      | Default                                     | Description                                                   |
+| -------------------------- | --------- | ------------------------------------------- | ------------------------------------------------------------- |
+| `SC_CONFIDENCE_THRESHOLD`  | `float`   | `0.55`                                      | Minimum confidence score to include a detection in the response. |
+| `SC_IOU_THRESHOLD`         | `float`   | `0.45`                                      | Intersection-over-Union threshold for non-maximum suppression.  |
+| `SC_MAX_DET`               | `integer` | `100`                                       | Maximum number of detections returned per frame.                |
+| `SC_MAX_FRAME_BYTES`       | `integer` | `2500000`                                   | Maximum allowed binary message size in bytes (~2.5 MB). Frames exceeding this limit are rejected without running inference. |
+| `SC_DEVICE`                | `string`  | `"cuda:0"`                                  | PyTorch device for inference. Use `"cpu"` for CPU-only environments. |
+| `SC_IMG_SIZE`              | `integer` | `640`                                       | Input resolution (pixels) for the YOLO model.                   |
+| `SC_HALF`                  | `boolean` | `true`                                      | Enable FP16 (half-precision) inference. Reduces VRAM usage and increases throughput on compatible GPUs. |
+
+<Warning>
+Setting `SC_HALF=true` requires a CUDA-capable GPU. Set it to `false` when running on CPU or in environments without FP16 support.
+</Warning>
+
+## Product catalog
+
+Detected class names are automatically matched against `config/products.yaml` to enrich detections with commercial metadata. The catalog maps class names (as trained in the model) to SKU, name, price, and currency.
+
+The catalog uses `USD` as the currency for all entries. If a detected class name has no match in the catalog, `product_info` will be `null` in the response.
+
+Example catalog entries:
+
+| Class name      | SKU            | Name                 | Price   |
+| --------------- | -------------- | -------------------- | ------- |
+| `manzana roja`  | `FRU-APL-001`  | Manzana roja         | $0.35   |
+| `soda`          | `DRI-SOD-001`  | Soda                 | $1.49   |
+| `caja cereal`   | `FOO-CER-001`  | Cereal caja          | $3.99   |
+| `zanahoria`     | `FRU-CAR-001`  | Zanahoria            | $0.25   |
+| `cepillo dental`| `HYG-TBR-001`  | Cepillo de dientes   | $2.10   |
+| `papel higienico`| `HYG-TPR-001` | Papel higiénico      | $4.50   |
+| `gafas`         | `ACC-GLA-001`  | Gafas                | $12.99  |
+| `gorra`         | `ACC-CAP-001`  | Gorra                | $8.99   |

@@ -1,0 +1,180 @@
+---
+title: "Docker deployment"
+description: "Build and run each service using Docker"
+---
+
+## Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) installed and running on your machine.
+- Model artifact files (`.pt` and `.joblib`) placed in the correct paths before building.
+
+<Warning>
+  Model artifacts must be present **before** running `docker build`. The build context copies the `python/` directory into the image, so missing `.pt` files will result in a container that fails to start.
+
+  Place artifacts as follows:
+  - Credit Scoring: `python/credit_scoring/models/` (`.pt` model + `.joblib` preprocessor)
+  - X-Ray Evaluation: `python/xrays_evaluation/src/models/YOLO/xrays_evaluation_model_medium_v1.pt`
+  - Smart Checkout: `python/smart_checkout/models/YOLO/smart_checkout_model_small_v1.pt`
+</Warning>
+
+## Building and running services
+
+All `docker build` commands must be run from the **repository root** (`deep_learning_services/`), as the build context and Dockerfile paths are relative to it.
+
+<Tabs>
+  <Tab title="Credit Scoring">
+    ### Build the image
+
+    ```bash
+    docker build \
+      -t ingeniia/credit-scoring-mlp:1.0 \
+      -f container-images/credit_scoring_service/Dockerfile \
+      .
+    ```
+
+    ### Run the container
+
+    ```bash
+    docker run -d \
+      -p 8000:8080 \
+      --name credit-scoring-service \
+      ingeniia/credit-scoring-mlp:1.0
+    ```
+
+    ### Verify it is working
+
+    Open the interactive API docs in your browser:
+
+    ```
+    http://localhost:8000/docs
+    ```
+
+    Or send a test prediction with cURL:
+
+    ```bash
+    curl -X POST http://localhost:8000/mlp_demo \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "Age": 35,
+        "Sex": "male",
+        "Job": 2,
+        "Housing": "own",
+        "Saving accounts": "little",
+        "Checking account": "moderate",
+        "Credit amount": 2500,
+        "Duration": 24,
+        "Purpose": "car"
+      }'
+    ```
+
+    Expected response:
+
+    ```json
+    {
+      "prediction": "good",
+      "probability": 0.7852
+    }
+    ```
+  </Tab>
+
+  <Tab title="X-Ray Evaluation">
+    ### Build the image
+
+    ```bash
+    docker build \
+      -t genia/xrays-evaluation-cnn:1.0 \
+      -f container-images/xrays_evaluation_service/Dockerfile \
+      .
+    ```
+
+    ### Run the container
+
+    ```bash
+    docker run -d \
+      -p 8080:8080 \
+      --name xrays-service \
+      genia/xrays-evaluation-cnn:1.0
+    ```
+
+    ### Verify it is working
+
+    Open the interactive API docs:
+
+    ```
+    http://localhost:8080/docs
+    ```
+
+    Or send a test request (Base64-encoded JPEG image):
+
+    ```bash
+    curl -X POST http://localhost:8080/cnn_xray_demo \
+      -H 'Content-Type: application/json' \
+      -d '{"image_base64": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDA..."}'
+    ```
+
+    The response includes the classification label, confidence score, GradCAM heatmap, and per-stage latency measurements.
+  </Tab>
+
+  <Tab title="Smart Checkout">
+    ### Build the image
+
+    ```bash
+    docker build \
+      -t genia/smart-checkout-ws:1.0 \
+      -f container-images/smart_checkout_service/Dockerfile \
+      .
+    ```
+
+    ### Run the container
+
+    ```bash
+    docker run -d \
+      -p 8080:8080 \
+      --name smart-checkout-ws \
+      genia/smart-checkout-ws:1.0
+    ```
+
+    <Note>
+      This service uses WebSockets for real-time video frame streaming, not a standard REST API. Use the example web client in `examples/web_client/` to test the full pipeline. A GPU is required for CUDA inference; without one the service will fall back to CPU, which may be too slow for real-time use.
+    </Note>
+
+    ### Verify it is working
+
+    Check the health endpoint to confirm the model loaded successfully:
+
+    ```bash
+    curl http://localhost:8080/health
+    ```
+  </Tab>
+</Tabs>
+
+## Container management
+
+The commands below apply to any running service. Replace `<container-name>` with the name used in your `docker run` command.
+
+| Action | Command |
+|---|---|
+| Stop | `docker stop <container-name>` |
+| Start (stopped container) | `docker start <container-name>` |
+| Tail logs | `docker logs -f <container-name>` |
+| Remove | `docker stop <container-name> && docker rm <container-name>` |
+
+Quick reference by service:
+
+```bash
+# Credit Scoring
+docker stop credit-scoring-service
+docker logs -f credit-scoring-service
+docker start credit-scoring-service
+docker stop credit-scoring-service && docker rm credit-scoring-service
+
+# X-Ray Evaluation
+docker stop xrays-service
+docker logs -f xrays-evaluation-service
+docker rm xrays-evaluation-service
+
+# Smart Checkout
+docker stop smart-checkout-ws
+docker logs -f smart-checkout-ws
+docker rm smart-checkout-ws
+```

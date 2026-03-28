@@ -1,0 +1,236 @@
+---
+title: "Credit Scoring Service"
+description: "Predict credit risk using a PyTorch MLP neural network"
+---
+
+## Overview
+
+The Credit Scoring Service is a RESTful microservice that predicts the credit risk of a loan applicant. It performs **binary classification** — outputting either `good` or `bad` credit risk — using the [German Credit Risk dataset](https://www.kaggle.com/datasets/uciml/german-credit) as its training basis.
+
+The service receives demographic and financial data, processes it through a scikit-learn preprocessing pipeline, and feeds it to a trained MLP model. It returns a prediction label and the associated probability score.
+
+## Model
+
+The service uses a **Multi-Layer Perceptron (MLP)** built with PyTorch, optimized with:
+
+- **Hidden layers:** `[256, 128, 64, 64]`
+- **Dropout rate:** `0.1`
+- **Batch Normalization:** enabled
+- **Activation function:** ReLU
+- **Input features:** 26 (after preprocessing/encoding)
+
+```python
+BEST_MODEL_CONFIG = {
+    'num_features': 26,
+    'hidden_layers': [256, 128, 64, 64],
+    'dropout_rate': 0.1,
+    'use_batch_norm': True,
+    'activation_fn': 'ReLU'
+}
+```
+
+The model is loaded once at startup (singleton pattern) and runs in `eval()` mode for inference.
+
+## Input Schema
+
+The endpoint accepts a JSON body with the following 9 fields:
+
+| Field | Type | Constraints | Description |
+|---|---|---|---|
+| `Age` | integer | `> 0` | Applicant age in years |
+| `Sex` | enum | see below | Applicant sex |
+| `Job` | integer | `0–3` | Job skill level |
+| `Housing` | enum | see below | Housing type |
+| `Saving accounts` | enum | see below | Savings account status |
+| `Checking account` | enum | see below | Checking account status |
+| `Credit amount` | float | `> 0` | Requested credit amount |
+| `Duration` | integer | `> 0` | Credit duration in months |
+| `Purpose` | enum | see below | Purpose of the credit |
+
+### Enum Values
+
+<Tabs>
+  <Tab title="Sex">
+    ```
+    "male"
+    "female"
+    ```
+  </Tab>
+  <Tab title="Housing">
+    ```
+    "own"
+    "rent"
+    "free"
+    ```
+  </Tab>
+  <Tab title="Saving accounts">
+    ```
+    "NA"
+    "little"
+    "moderate"
+    "quite rich"
+    "rich"
+    ```
+  </Tab>
+  <Tab title="Checking account">
+    ```
+    "NA"
+    "little"
+    "moderate"
+    "rich"
+    ```
+  </Tab>
+  <Tab title="Purpose">
+    ```
+    "car"
+    "furniture/equipment"
+    "radio/TV"
+    "domestic appliances"
+    "repairs"
+    "education"
+    "business"
+    "vacation/others"
+    ```
+  </Tab>
+</Tabs>
+
+## Endpoint
+
+### `POST /mlp_demo`
+
+Receives applicant data and returns a credit risk prediction.
+
+**Request body** — `CreditRiskInput`:
+
+```json
+{
+  "Age": 35,
+  "Sex": "male",
+  "Job": 2,
+  "Housing": "own",
+  "Saving accounts": "little",
+  "Checking account": "moderate",
+  "Credit amount": 2500,
+  "Duration": 24,
+  "Purpose": "car"
+}
+```
+
+**Response** — `CreditRiskOutput`:
+
+```json
+{
+  "prediction": "good",
+  "probability": 0.7852
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `prediction` | string | `"good"` or `"bad"` |
+| `probability` | float `[0, 1]` | Probability that the risk is `"good"` |
+
+<Note>
+  The threshold for classification is `0.5`. If `probability >= 0.5`, the prediction is `"good"`.
+</Note>
+
+### `GET /`
+
+Redirects to the interactive Swagger UI at `/docs`.
+
+## Example Request
+
+<Tabs>
+  <Tab title="cURL">
+    ```bash
+    curl -X 'POST' \
+      'http://localhost:8000/mlp_demo' \
+      -H 'accept: application/json' \
+      -H 'Content-Type: application/json' \
+      -d '{
+      "Age": 35,
+      "Sex": "male",
+      "Job": 2,
+      "Housing": "own",
+      "Saving accounts": "little",
+      "Checking account": "moderate",
+      "Credit amount": 2500,
+      "Duration": 24,
+      "Purpose": "car"
+    }'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    {
+      "prediction": "good",
+      "probability": 0.7852
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Local Development
+
+<Steps>
+  <Step title="Prepare model artifacts">
+    Place the trained model (`.pt`) and preprocessor (`.joblib`) in:
+    ```
+    python/credit_scoring/models/
+    ```
+  </Step>
+  <Step title="Build the Docker image">
+    From the repository root (`deep_learning_services/`):
+
+    ```bash
+    docker build -t ingeniia/credit-scoring-mlp:1.0 -f container-images/credit_scoring_service/Dockerfile .
+    ```
+  </Step>
+  <Step title="Run the container">
+    ```bash
+    docker run -d -p 8000:8080 --name credit-scoring-service ingeniia/credit-scoring-mlp:1.0
+    ```
+  </Step>
+  <Step title="Verify the service">
+    Open the interactive API documentation in your browser:
+
+    ```
+    http://localhost:8000/docs
+    ```
+  </Step>
+</Steps>
+
+## Container Management
+
+```bash
+# Stop the container
+docker stop credit-scoring-service
+
+# Stream logs in real time
+docker logs -f credit-scoring-service
+
+# Restart a stopped container
+docker start credit-scoring-service
+
+# Stop and remove the container
+docker stop credit-scoring-service && docker rm credit-scoring-service
+```
+
+## Cloud Deployment
+
+The service is designed for **serverless deployment on Google Cloud Run** using a Cloud Build CI/CD pipeline (`ops/cloudbuild-credit_scoring_service.yaml`).
+
+<CardGroup cols={2}>
+  <Card title="Region" icon="location-dot">
+    `us-central1`
+  </Card>
+  <Card title="Memory" icon="memory">
+    `1Gi`
+  </Card>
+  <Card title="Port" icon="plug">
+    `8080`
+  </Card>
+  <Card title="Auth" icon="lock-open">
+    `--allow-unauthenticated`
+  </Card>
+</CardGroup>

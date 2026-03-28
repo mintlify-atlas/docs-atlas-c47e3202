@@ -1,0 +1,282 @@
+---
+title: "Model overview"
+description: "Neural network architectures used across the three deep learning services"
+---
+
+<CardGroup cols={3}>
+  <Card title="Credit Scoring" icon="brain" href="#credit-scoring--mlp">
+    PyTorch MLP — binary credit risk classification from 9 tabular features.
+  </Card>
+  <Card title="X-Ray Evaluation" icon="eye" href="#x-ray-evaluation--yolov11-cls">
+    YOLOv11-cls CNN — chest X-ray anomaly detection with GradCAM explainability.
+  </Card>
+  <Card title="Smart Checkout" icon="cart-shopping" href="#smart-checkout--yolov26m">
+    YOLOv26m CNN — real-time multi-class grocery product detection over WebSockets.
+  </Card>
+</CardGroup>
+
+---
+
+## Credit Scoring — MLP
+
+The credit scoring service uses a **Multi-Layer Perceptron (MLP)** implemented in PyTorch for binary classification of credit applicants into `good` or `bad` risk categories.
+
+### Architecture
+
+The model is defined in `CreditScoringModel` (`src/training/model.py`) as a fully configurable `nn.Sequential` stack. Each hidden block follows the pattern:
+
+```
+Linear → BatchNorm1d → ReLU → Dropout
+```
+
+The deployed configuration uses four hidden layers:
+
+| Layer | Units |
+|-------|-------|
+| Input | 26 (post-preprocessing) |
+| Hidden 1 | 256 |
+| Hidden 2 | 128 |
+| Hidden 3 | 64 |
+| Hidden 4 | 64 |
+| Output | 1 (logit) |
+
+Key hyperparameters from `BEST_MODEL_CONFIG` in `predictor.py`:
+
+| Parameter | Value |
+|-----------|-------|
+| `num_features` | 26 |
+| `hidden_layers` | `[256, 128, 64, 64]` |
+| `dropout_rate` | 0.1 |
+| `use_batch_norm` | `True` |
+| `activation_fn` | `ReLU` |
+
+<Note>
+  The raw input has 9 features. After scikit-learn preprocessing (one-hot encoding of categorical variables), the feature vector expands to **26 dimensions** before entering the network.
+</Note>
+
+### Task
+
+Binary classification: predict whether a credit applicant is **good** (low risk) or **bad** (high risk).
+
+- Loss function: `BCEWithLogitsLoss` (with optional `pos_weight` for class imbalance)
+- Optimizer: Adam / AdamW / SGD (configurable via YAML)
+- Scheduler: `ReduceLROnPlateau`
+- Regularization: Dropout (0.1) + BatchNorm + gradient clipping (`max_norm=1.0`)
+- Early stopping: enabled
+
+### Input features
+
+The service accepts 9 raw features, validated via Pydantic schemas:
+
+| Feature | Type | Example |
+|---------|------|---------|
+| `Age` | integer | `35` |
+| `Sex` | enum (`male` / `female`) | `"male"` |
+| `Job` | integer (0–3) | `2` |
+| `Housing` | enum (`own` / `free` / `rent`) | `"own"` |
+| `Saving accounts` | enum (`NA` / `little` / `moderate` / `quite rich` / `rich`) | `"little"` |
+| `Checking account` | enum (`NA` / `little` / `moderate` / `rich`) | `"moderate"` |
+| `Credit amount` | integer | `2500` |
+| `Duration` | integer (months) | `24` |
+| `Purpose` | enum (`car` / `furniture/equipment` / `radio/TV` / `domestic appliances` / `repairs` / `education` / `business` / `vacation/others`) | `"car"` |
+
+### Output
+
+```json
+{
+  "prediction": "good",
+  "probability": 0.7852
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `prediction` | `"good"` \| `"bad"` | Binary label (threshold: 0.5) |
+| `probability` | `float` (0.0–1.0) | Sigmoid-transformed logit score |
+
+### Model artifacts
+
+| File | Format | Description |
+|------|--------|-------------|
+| `genia_services_mlp_credit_scoring_model_v1.3.0_20250824.pt` | PyTorch state dict | Trained network weights |
+| `german_credit_risk_preprocessor.joblib` | scikit-learn pipeline | Fitted preprocessor (encoder + scaler) |
+
+---
+
+## X-Ray Evaluation — YOLOv11-cls
+
+The X-ray evaluation service uses a **YOLOv11 classification model** (Ultralytics `YOLO11m-cls`) to classify chest radiographs and an in-house **GradCAM** implementation to produce visual explanations.
+
+### Architecture
+
+The model is loaded via the Ultralytics `YOLO` API in `yolo_classifier.py`:
+
+```python
+self.model = YOLO("models/YOLO/xrays_evaluation_model_medium_v1.pt")
+self.model.to('cuda' if torch.cuda.is_available() else 'cpu')
+```
+
+The backbone is a **YOLOv11 medium-size classification network** (`YOLO11m-cls`), a convolutional neural network optimized for image classification tasks. Inference uses the top-1 probability from the model's `probs` output.
+
+### Task
+
+Binary image classification:
+
+| Class ID | Label |
+|----------|-------|
+| 0 | `Anomaly` |
+| 1 | `Normal` |
+
+### Input
+
+- Format: Base64-encoded image (JPEG or PNG)
+- Decoding: `base64.b64decode` → `cv2.imdecode` (BGR numpy array)
+- Device: CUDA if available, otherwise CPU
+
+### Output
+
+```json
+{
+  "prediction": {
+    "label": "Anomaly",
+    "confidence": 0.985,
+    "class_id": 0
+  },
+  "explainability": {
+    "heatmap_base64": "...",
+    "overlay_base64": "...",
+    "description": "Red indicates high attention regions."
+  },
+  "performance": {
+    "preprocess_time_ms": 12.5,
+    "inference_time_ms": 15.2,
+    "explainability_time_ms": 8.1,
+    "total_latency_ms": 35.8,
+    "model_used": "YOLO11m-cls"
+  }
+}
+```
+
+### Explainability — GradCAM
+
+The `SimpleGradCam` class (`src/processing/explainability/gradcam.py`) generates attention heatmaps via a forward-hook approach:
+
+1. Automatically locates the **last `Conv2d` layer** in the model.
+2. Registers a forward hook to capture the layer's activation map (shape `[1, C, H, W]`).
+3. Averages activations across channels (Fast-CAM): `mean(acts, dim=1)`.
+4. Applies `ReLU` and min-max normalization to produce a normalized heatmap.
+5. Resizes the heatmap to the original image resolution via `cv2.resize`.
+6. Applies a **JET colormap** (`cv2.COLORMAP_JET`) and blends the heatmap over the original X-ray with `alpha=0.5`.
+
+<Tip>
+  The heatmap and overlay images are both returned as Base64-encoded JPEG strings. Red regions indicate the areas the model weighted most heavily when making its classification decision.
+</Tip>
+
+### Model artifact
+
+| File | Description |
+|------|-------------|
+| `xrays_evaluation_model_medium_v1.pt` | YOLOv11m-cls weights (Ultralytics format) |
+
+---
+
+## Smart Checkout — YOLOv26m
+
+The smart checkout service uses a **YOLOv26 medium detection model** (Ultralytics) for real-time multi-class object detection of grocery products, served over a WebSocket binary protocol.
+
+### Architecture
+
+The model is loaded and warmed up in `ObjectDetector.load_model()` (`src/inference/engine.py`):
+
+```python
+self.model = YOLO("models/YOLO/smart_checkout_model_small_v1.pt")
+self.model.to("cuda:0")
+# Warmup pass
+dummy_input = np.zeros((640, 640, 3), dtype=np.uint8)
+self.model.predict(dummy_input, verbose=False, device="cuda:0")
+```
+
+The architecture is based on **YOLOv26m** (Ultralytics), a CNN detection backbone producing bounding box predictions with associated class scores.
+
+### Task
+
+Multi-class object detection across a grocery product catalog. Detections are enriched with product metadata from `config/products.yaml`.
+
+### Inference settings
+
+All inference parameters are defined in `config/settings.py`:
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `device` | `cuda:0` | NVIDIA GPU (CUDA) |
+| `img_size` | `640` | Input resolution (px) |
+| `confidence_threshold` | `0.55` | Minimum detection confidence |
+| `iou_threshold` | `0.45` | NMS IOU threshold |
+| `max_det` | `100` | Maximum detections per frame |
+| `half` | `True` | FP16 half-precision inference |
+
+<Warning>
+  This service requires a CUDA-capable GPU. It is designed for deployment on Google Cloud Run with an **NVIDIA L4** GPU (4 vCPU / 16 GiB RAM). Inference on CPU is not supported in production.
+</Warning>
+
+### Input — WebSocket binary protocol
+
+Clients connect via WebSocket and send raw binary `ArrayBuffer` frames:
+
+```
+[8 bytes — uint64 frame_id (Little-Endian)] + [JPEG bytes]
+```
+
+Frames are decoded server-side using `cv2.imdecode`. Maximum frame size: **2.5 MB**.
+
+### Output
+
+```json
+{
+  "frame_id": 1708453456789,
+  "server_time": 1708453456810,
+  "inference_time": 15.4,
+  "img_size": [640, 640],
+  "detections": [
+    {
+      "class_id": 2,
+      "class_name": "manzana roja",
+      "confidence": 0.94,
+      "bbox_norm": [0.45, 0.60, 0.12, 0.15],
+      "product_info": {
+        "sku": "FRU-APL-001",
+        "name": "Manzana roja",
+        "price": 0.35,
+        "currency": "USD",
+        "description": "Manzana roja fresca"
+      }
+    }
+  ],
+  "extra": {
+    "total_items": 1
+  }
+}
+```
+
+Bounding boxes (`bbox_norm`) are normalized `[cx, cy, w, h]` coordinates (YOLO `xywhn` format).
+
+### Product catalog
+
+Detected class names are looked up against `config/products.yaml`. The catalog (v1.0.0, currency USD) includes:
+
+| SKU | Product | Price |
+|-----|---------|-------|
+| `FOO-CER-001` | Cereal caja | $3.99 |
+| `DRI-SOD-001` | Soda | $1.49 |
+| `FRU-APL-001` | Manzana roja | $0.35 |
+| `FRU-CAR-001` | Zanahoria | $0.25 |
+| `HYG-TBR-001` | Cepillo de dientes | $2.10 |
+| `HYG-TPR-001` | Papel higiénico | $4.50 |
+| `ACC-GLA-001` | Gafas | $12.99 |
+| `ACC-CAP-001` | Gorra | $8.99 |
+
+### Model artifact
+
+| File | Description |
+|------|-------------|
+| `smart_checkout_model_small_v1.pt` | YOLOv26m detection weights (Ultralytics format) |
